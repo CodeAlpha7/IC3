@@ -477,10 +477,11 @@ ${problemInfo.example_output || "No example output provided."}
 LANGUAGE: ${language}
 
 I need the response in the following format:
-1. Code: A clean, optimized implementation in ${language}
-2. Your Thoughts: A list of key insights and reasoning behind your approach
-3. Time complexity: O(X) with a detailed explanation (at least 2 sentences)
-4. Space complexity: O(X) with a detailed explanation (at least 2 sentences)
+1. Your Thoughts: A list of key insights and reasoning behind your approach
+2. Pseudocode: A high-level algorithm outline in pseudocode format
+3. Code: A clean, optimized implementation in ${language}
+4. Time complexity: O(X) with a detailed explanation (at least 2 sentences)
+5. Space complexity: O(X) with a detailed explanation (at least 2 sentences)
 
 For complexity explanations, please be thorough. For example: "Time complexity: O(n) because we iterate through the array only once. This is optimal as we need to examine each element at least once to find the solution." or "Space complexity: O(n) because in the worst case, we store all elements in the hashmap. The additional space scales linearly with the input size."
 
@@ -508,6 +509,14 @@ Your solution should be efficient, well-commented, and handle edge cases.
       const thoughtsRegex = /(?:Thoughts:|Key Insights:|Reasoning:|Approach:)([\s\S]*?)(?:Time complexity:|$)/i;
       const thoughtsMatch = responseContent.match(thoughtsRegex);
       let thoughts: string[] = [];
+
+      // Extract pseudocode with a regex pattern
+      const pseudocodeRegex = /(?:Pseudocode:|2\.\s*Pseudocode:)([\s\S]*?)(?:Code:|3\.\s*Code:)/i;
+      const pseudocodeMatch = responseContent.match(pseudocodeRegex);
+      let pseudocode = "";
+      if (pseudocodeMatch && pseudocodeMatch[1]) {
+        pseudocode = pseudocodeMatch[1].trim();
+      }
       
       if (thoughtsMatch && thoughtsMatch[1]) {
         // Extract bullet points or numbered items
@@ -571,6 +580,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
       // Construct the formatted response
       const formattedResponse = {
         code: code,
+        pseudocode: pseudocode,
         thoughts: thoughts.length > 0 ? thoughts : ["Solution approach based on efficiency and readability"],
         time_complexity: timeComplexity,
         space_complexity: spaceComplexity
