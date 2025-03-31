@@ -161,6 +161,7 @@ const Solutions: React.FC<SolutionsProps> = ({
   const [problemStatementData, setProblemStatementData] =
     useState<ProblemStatementData | null>(null)
   const [solutionData, setSolutionData] = useState<string | null>(null)
+  const [pseudocodeData, setPseudocodeData] = useState<string | null>(null);
   const [thoughtsData, setThoughtsData] = useState<string[] | null>(null)
   const [timeComplexityData, setTimeComplexityData] = useState<string | null>(
     null
@@ -286,6 +287,7 @@ const Solutions: React.FC<SolutionsProps> = ({
         // Reset solutions in the cache (even though this shouldn't ever happen) and complexities to previous states
         const solution = queryClient.getQueryData(["solution"]) as {
           code: string
+          pseudocode: string
           thoughts: string[]
           time_complexity: string
           space_complexity: string
@@ -294,6 +296,7 @@ const Solutions: React.FC<SolutionsProps> = ({
           setView("queue")
         }
         setSolutionData(solution?.code || null)
+        setPseudocodeData(solution?.pseudocode ?? null);
         setThoughtsData(solution?.thoughts || null)
         setTimeComplexityData(solution?.time_complexity || null)
         setSpaceComplexityData(solution?.space_complexity || null)
@@ -520,6 +523,18 @@ const Solutions: React.FC<SolutionsProps> = ({
                         )
                       }
                       isLoading={!thoughtsData}
+                    />
+
+                    <ContentSection
+                      title="Pseudocode"
+                      content={
+                        pseudocodeData && (
+                          <div className="text-[13px] leading-[1.4] text-gray-100 bg-black/30 rounded-md p-3 whitespace-pre-wrap font-mono">
+                            {pseudocodeData}
+                          </div>
+                        )
+                      }
+                      isLoading={!pseudocodeData}
                     />
 
                     <SolutionSection
