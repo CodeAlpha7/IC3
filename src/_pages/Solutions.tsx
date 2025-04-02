@@ -38,6 +38,7 @@ export const ContentSection = ({
     )}
   </div>
 )
+
 const SolutionSection = ({
   title,
   content,
@@ -79,6 +80,38 @@ const SolutionSection = ({
         >
           {content as string}
         </SyntaxHighlighter>
+      </div>
+    )}
+  </div>
+)
+
+// New component for displaying pseudocode
+const PseudocodeSection = ({
+  title,
+  content,
+  isLoading
+}: {
+  title: string
+  content: React.ReactNode
+  isLoading: boolean
+}) => (
+  <div className="space-y-2">
+    <h2 className="text-[13px] font-medium text-white tracking-wide">
+      {title}
+    </h2>
+    {isLoading ? (
+      <div className="space-y-1.5">
+        <div className="mt-4 flex">
+          <p className="text-xs bg-gradient-to-r from-gray-300 via-gray-100 to-gray-300 bg-clip-text text-transparent animate-pulse">
+            Loading pseudocode...
+          </p>
+        </div>
+      </div>
+    ) : (
+      <div className="w-full">
+        <div className="text-[13px] leading-[1.4] text-gray-100 bg-black/30 rounded-md p-3 whitespace-pre-wrap font-mono">
+          {content}
+        </div>
       </div>
     )}
   </div>
@@ -161,7 +194,7 @@ const Solutions: React.FC<SolutionsProps> = ({
   const [problemStatementData, setProblemStatementData] =
     useState<ProblemStatementData | null>(null)
   const [solutionData, setSolutionData] = useState<string | null>(null)
-  const [pseudocodeData, setPseudocodeData] = useState<string | null>(null);
+  const [pseudocodeData, setPseudocodeData] = useState<string | null>(null)
   const [thoughtsData, setThoughtsData] = useState<string[] | null>(null)
   const [timeComplexityData, setTimeComplexityData] = useState<string | null>(
     null
@@ -274,6 +307,7 @@ const Solutions: React.FC<SolutionsProps> = ({
       window.electronAPI.onSolutionStart(() => {
         // Every time processing starts, reset relevant states
         setSolutionData(null)
+        setPseudocodeData(null)
         setThoughtsData(null)
         setTimeComplexityData(null)
         setSpaceComplexityData(null)
@@ -296,7 +330,7 @@ const Solutions: React.FC<SolutionsProps> = ({
           setView("queue")
         }
         setSolutionData(solution?.code || null)
-        setPseudocodeData(solution?.pseudocode ?? null);
+        setPseudocodeData(solution?.pseudocode || null)
         setThoughtsData(solution?.thoughts || null)
         setTimeComplexityData(solution?.time_complexity || null)
         setSpaceComplexityData(solution?.space_complexity || null)
@@ -311,6 +345,7 @@ const Solutions: React.FC<SolutionsProps> = ({
         console.log({ data })
         const solutionData = {
           code: data.code,
+          pseudocode: data.pseudocode,
           thoughts: data.thoughts,
           time_complexity: data.time_complexity,
           space_complexity: data.space_complexity
@@ -318,6 +353,7 @@ const Solutions: React.FC<SolutionsProps> = ({
 
         queryClient.setQueryData(["solution"], solutionData)
         setSolutionData(solutionData.code || null)
+        setPseudocodeData(solutionData.pseudocode || null)
         setThoughtsData(solutionData.thoughts || null)
         setTimeComplexityData(solutionData.time_complexity || null)
         setSpaceComplexityData(solutionData.space_complexity || null)
@@ -394,12 +430,14 @@ const Solutions: React.FC<SolutionsProps> = ({
       if (event?.query.queryKey[0] === "solution") {
         const solution = queryClient.getQueryData(["solution"]) as {
           code: string
+          pseudocode: string
           thoughts: string[]
           time_complexity: string
           space_complexity: string
         } | null
 
         setSolutionData(solution?.code ?? null)
+        setPseudocodeData(solution?.pseudocode ?? null)
         setThoughtsData(solution?.thoughts ?? null)
         setTimeComplexityData(solution?.time_complexity ?? null)
         setSpaceComplexityData(solution?.space_complexity ?? null)
@@ -525,15 +563,10 @@ const Solutions: React.FC<SolutionsProps> = ({
                       isLoading={!thoughtsData}
                     />
 
-                    <ContentSection
+                    {/* Pseudocode Section - Add between Thoughts and Code */}
+                    <PseudocodeSection
                       title="Pseudocode"
-                      content={
-                        pseudocodeData && (
-                          <div className="text-[13px] leading-[1.4] text-gray-100 bg-black/30 rounded-md p-3 whitespace-pre-wrap font-mono">
-                            {pseudocodeData}
-                          </div>
-                        )
-                      }
+                      content={pseudocodeData}
                       isLoading={!pseudocodeData}
                     />
 
