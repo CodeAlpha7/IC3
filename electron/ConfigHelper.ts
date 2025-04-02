@@ -4,9 +4,12 @@ import path from "node:path"
 import { app } from "electron"
 import { EventEmitter } from "events"
 import { OpenAI } from "openai"
+import Anthropic from "@anthropic-ai/sdk";
 
 interface Config {
-  apiKey: string;
+  provider: 'openai' | 'claude'; // Add provider selection
+  apiKey: string;  // OpenAI API key
+  claudeApiKey: string; // Claude API key
   extractionModel: string;
   solutionModel: string;
   debuggingModel: string;
@@ -17,7 +20,9 @@ interface Config {
 export class ConfigHelper extends EventEmitter {
   private configPath: string;
   private defaultConfig: Config = {
+    provider: "openai",
     apiKey: "",
+    claudeApiKey: "",
     extractionModel: "gpt-4o",
     solutionModel: "gpt-4o",
     debuggingModel: "gpt-4o",
@@ -166,11 +171,20 @@ export class ConfigHelper extends EventEmitter {
   /**
    * Validate the API key format
    */
-  public isValidApiKeyFormat(apiKey: string): boolean {
-    // Basic format validation for OpenAI API keys
+  // Add Claude API key validation
+  public isValidClaudeApiKeyFormat(apiKey: string): boolean {
+    // Basic format validation for Claude API keys (starting with sk-ant or sk_ant)
+    return /^sk[-_]ant[-_][a-zA-Z0-9]{32,}$/.test(apiKey.trim());
+  }
+
+  // Update the existing API key validation to handle both formats
+  public isValidApiKeyFormat(apiKey: string, provider: 'openai' | 'claude' = 'openai'): boolean {
+    if (provider === 'claude') {
+      return this.isValidClaudeApiKeyFormat(apiKey);
+    }
+    // Original OpenAI validation
     return /^sk-[a-zA-Z0-9]{32,}$/.test(apiKey.trim());
   }
-  
   /**
    * Get the stored opacity value
    */
@@ -203,27 +217,36 @@ export class ConfigHelper extends EventEmitter {
     this.updateConfig({ language });
   }
   
-  /**
-   * Test API key with OpenAI
-   */
-  public async testApiKey(apiKey: string): Promise<{valid: boolean, error?: string}> {
+  // Update the testApiKey method to test both OpenAI and Claude keys
+  public async testApiKey(apiKey: string, provider: 'openai' | 'claude' = 'openai'): Promise<{valid: boolean, error?: string}> {
     try {
-      const openai = new OpenAI({ apiKey });
-      // Make a simple API call to test the key
-      await openai.models.list();
-      return { valid: true };
+      if (provider === 'claude') {
+        const anthropic = new Anthropic({ apiKey });
+        // Make a simple API call to test the key
+        await anthropic.messages.create({
+          model: "claude-3-7-sonnet-20250219",
+          max_tokens: 10,
+          messages: [{ role: "user", content: "Hello" }]
+        });
+        return { valid: true };
+      } else {
+        // Existing OpenAI test
+        const openai = new OpenAI({ apiKey });
+        await openai.models.list();
+        return { valid: true };
+      }
     } catch (error: any) {
-      console.error('API key test failed:', error);
+      console.error(`${provider} API key test failed:`, error);
       
       // Determine the specific error type for better error messages
-      let errorMessage = 'Unknown error validating API key';
+      let errorMessage = `Unknown error validating ${provider} API key`;
       
       if (error.status === 401) {
-        errorMessage = 'Invalid API key. Please check your key and try again.';
+        errorMessage = `Invalid ${provider} API key. Please check your key and try again.`;
       } else if (error.status === 429) {
-        errorMessage = 'Rate limit exceeded. Your API key has reached its request limit or has insufficient quota.';
+        errorMessage = `Rate limit exceeded. Your ${provider} API key has reached its request limit or has insufficient quota.`;
       } else if (error.status === 500) {
-        errorMessage = 'OpenAI server error. Please try again later.';
+        errorMessage = `${provider} server error. Please try again later.`;
       } else if (error.message) {
         errorMessage = `Error: ${error.message}`;
       }

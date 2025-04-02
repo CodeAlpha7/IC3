@@ -205,8 +205,16 @@ const electronAPI = {
   
   // New methods for OpenAI API integration
   getConfig: () => ipcRenderer.invoke("get-config"),
-  updateConfig: (config: { apiKey?: string; model?: string; language?: string; opacity?: number }) => 
-    ipcRenderer.invoke("update-config", config),
+  updateConfig: (config: { 
+    provider?: 'openai' | 'claude';
+    apiKey?: string; 
+    claudeApiKey?: string;
+    extractionModel?: string; 
+    solutionModel?: string; 
+    debuggingModel?: string; 
+    language?: string; 
+    opacity?: number 
+  }) => ipcRenderer.invoke("update-config", config),
   onShowSettings: (callback: () => void) => {
     const subscription = () => callback()
     ipcRenderer.on("show-settings-dialog", subscription)

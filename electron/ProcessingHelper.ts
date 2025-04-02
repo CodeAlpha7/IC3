@@ -6,12 +6,14 @@ import { IProcessingHelperDeps } from "./main"
 import * as axios from "axios"
 import { app, BrowserWindow } from "electron"
 import { OpenAI } from "openai"
+import Anthropic from "@anthropic-ai/sdk"
 import { configHelper } from "./ConfigHelper"
 
 export class ProcessingHelper {
   private deps: IProcessingHelperDeps
   private screenshotHelper: ScreenshotHelper
   private openaiClient: OpenAI | null = null
+  private claudeClient: Anthropic | null = null
 
   // AbortControllers for API requests
   private currentProcessingAbortController: AbortController | null = null
@@ -21,21 +23,36 @@ export class ProcessingHelper {
     this.deps = deps
     this.screenshotHelper = deps.getScreenshotHelper()
     
-    // Initialize OpenAI client
-    this.initializeOpenAIClient();
+    // Initialize OpenAI and Claude clients
+    this.initializeClients();
     
-    // Listen for config changes to re-initialize the OpenAI client
+    // Listen for config changes to re-initialize clients
     configHelper.on('config-updated', () => {
-      this.initializeOpenAIClient();
+      this.initializeClients();
     });
   }
   
   /**
-   * Initialize or reinitialize the OpenAI client with current config
+   * Helper method to determine which client to use
    */
-  private initializeOpenAIClient(): void {
+  private getActiveClient() {
+    const config = configHelper.loadConfig();
+    return config.provider === 'claude' ? this.claudeClient : this.openaiClient;
+  }
+
+  private getActiveClientName() {
+    const config = configHelper.loadConfig();
+    return config.provider === 'claude' ? 'Claude' : 'OpenAI';
+  }
+  
+  /**
+   * Initialize or reinitialize the API clients with current config
+   */
+  private initializeClients(): void {
     try {
       const config = configHelper.loadConfig();
+      
+      // Initialize OpenAI client if API key is available
       if (config.apiKey) {
         this.openaiClient = new OpenAI({ 
           apiKey: config.apiKey,
@@ -45,11 +62,23 @@ export class ProcessingHelper {
         console.log("OpenAI client initialized successfully");
       } else {
         this.openaiClient = null;
-        console.warn("No API key available, OpenAI client not initialized");
+        console.warn("No OpenAI API key available");
+      }
+      
+      // Initialize Claude client if API key is available
+      if (config.claudeApiKey) {
+        this.claudeClient = new Anthropic({
+          apiKey: config.claudeApiKey,
+        });
+        console.log("Claude client initialized successfully");
+      } else {
+        this.claudeClient = null;
+        console.warn("No Claude API key available");
       }
     } catch (error) {
-      console.error("Failed to initialize OpenAI client:", error);
+      console.error("Failed to initialize API clients:", error);
       this.openaiClient = null;
+      this.claudeClient = null;
     }
   }
 
@@ -124,12 +153,17 @@ export class ProcessingHelper {
     const mainWindow = this.deps.getMainWindow()
     if (!mainWindow) return
 
-    // First verify we have a valid OpenAI client
-    if (!this.openaiClient) {
-      this.initializeOpenAIClient();
+    // Get current config to determine which provider to use
+    const config = configHelper.loadConfig();
+    const activeClient = this.getActiveClient();
+    const clientName = this.getActiveClientName();
+
+    // First verify we have a valid API client
+    if (!activeClient) {
+      this.initializeClients(); // Try to reinitialize
       
-      if (!this.openaiClient) {
-        console.error("OpenAI client not initialized");
+      if (!activeClient) {
+        console.error(`${clientName} client not initialized`);
         mainWindow.webContents.send(
           this.deps.PROCESSING_EVENTS.API_KEY_INVALID
         );
@@ -166,7 +200,7 @@ export class ProcessingHelper {
 
         if (!result.success) {
           console.log("Processing failed:", result.error)
-          if (result.error?.includes("API Key") || result.error?.includes("OpenAI")) {
+          if (result.error?.includes("API Key") || result.error?.includes(clientName)) {
             mainWindow.webContents.send(
               this.deps.PROCESSING_EVENTS.API_KEY_INVALID
             )
@@ -287,19 +321,23 @@ export class ProcessingHelper {
       const language = await this.getLanguage();
       const mainWindow = this.deps.getMainWindow();
       
-      // Verify OpenAI client
-      if (!this.openaiClient) {
-        this.initializeOpenAIClient(); // Try to reinitialize
+      // Determine which provider to use
+      const activeClient = this.getActiveClient();
+      const clientName = this.getActiveClientName();
+      
+      // Verify client is initialized
+      if (!activeClient) {
+        this.initializeClients(); // Try to reinitialize
         
-        if (!this.openaiClient) {
+        if (!activeClient) {
           return {
             success: false,
-            error: "OpenAI API key not configured or invalid. Please check your settings."
+            error: `${clientName} API key not configured or invalid. Please check your settings.`
           };
         }
       }
 
-      // Step 1: Extract problem info using OpenAI Vision API
+      // Extract problem info using API
       const imageDataList = screenshots.map(screenshot => screenshot.data);
       
       // Update the user on progress
@@ -310,56 +348,107 @@ export class ProcessingHelper {
         });
       }
       
-      const messages = [
-        {
-          role: "system" as const, 
-          content: "You are a coding challenge interpreter. Analyze the screenshot of the coding problem and extract all relevant information. Return the information in JSON format with these fields: problem_statement, constraints, example_input, example_output. Just return the structured JSON without any other text."
-        },
-        {
-          role: "user" as const,
-          content: [
-            {
-              type: "text" as const, 
-              text: `Extract the coding problem details from these screenshots. Return in JSON format. Preferred coding language we gonna use for this problem is ${language}.`
-            },
-            ...imageDataList.map(data => ({
-              type: "image_url" as const,
-              image_url: { url: `data:image/png;base64,${data}` }
-            }))
-          ]
-        }
-      ];
-
-      // Send to OpenAI Vision API
-      const extractionResponse = await this.openaiClient.chat.completions.create({
-        model: config.extractionModel || "gpt-4o",
-        messages: messages,
-        max_tokens: 4000,
-        temperature: 0.2
-      });
-
-      // Parse the response to get structured problem info
       let problemInfo;
-      try {
-        const responseText = extractionResponse.choices[0].message.content;
-        // Handle when OpenAI might wrap the JSON in markdown code blocks
-        const jsonText = responseText.replace(/```json|```/g, '').trim();
-        problemInfo = JSON.parse(jsonText);
-        
-        // Update the user on progress
-        if (mainWindow) {
-          mainWindow.webContents.send("processing-status", {
-            message: "Problem analyzed successfully. Preparing to generate solution...",
-            progress: 40
+      
+      if (config.provider === 'claude') {
+        // Claude implementation for vision API
+        try {
+          const messages = [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: `Extract the coding problem details from these screenshots. Return in JSON format with these fields: problem_statement, constraints, example_input, example_output. Just return the structured JSON without any other text. Preferred coding language we gonna use for this problem is ${language}.`
+                },
+                ...imageDataList.map(data => ({
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: "image/png",
+                    data: data
+                  }
+                }))
+              ]
+            }
+          ];
+
+          const extractionResponse = await this.claudeClient.messages.create({
+            model: "claude-3-7-sonnet-20250219",
+            max_tokens: 4000,
+            temperature: 0.2,
+            system: "You are a coding challenge interpreter. Analyze the screenshot of the coding problem and extract all relevant information. Return the information in JSON format with these fields: problem_statement, constraints, example_input, example_output. Just return the structured JSON without any other text.",
+            messages: messages
           });
+
+          // Parse Claude's response
+          const responseText = extractionResponse.content[0].text;
+          const jsonText = responseText.replace(/```json|```/g, '').trim();
+          problemInfo = JSON.parse(jsonText);
+          
+          // Update the user on progress
+          if (mainWindow) {
+            mainWindow.webContents.send("processing-status", {
+              message: "Problem analyzed successfully. Preparing to generate solution...",
+              progress: 40
+            });
+          }
+        } catch (error) {
+          console.error("Error parsing Claude problem extraction response:", error);
+          return {
+            success: false,
+            error: "Failed to parse problem information. Please try again or use clearer screenshots."
+          };
         }
-      } catch (error) {
-        console.error("Error parsing problem extraction response:", error);
-        console.log("Raw response:", extractionResponse.choices[0].message.content);
-        return {
-          success: false,
-          error: "Failed to parse problem information. Please try again or use clearer screenshots."
-        };
+      } else {
+        // OpenAI implementation for vision API
+        try {
+          const messages = [
+            {
+              role: "system",
+              content: "You are a coding challenge interpreter. Analyze the screenshot of the coding problem and extract all relevant information. Return the information in JSON format with these fields: problem_statement, constraints, example_input, example_output. Just return the structured JSON without any other text."
+            },
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: `Extract the coding problem details from these screenshots. Return in JSON format. Preferred coding language we gonna use for this problem is ${language}.`
+                },
+                ...imageDataList.map(data => ({
+                  type: "image_url",
+                  image_url: { url: `data:image/png;base64,${data}` }
+                }))
+              ]
+            }
+          ];
+
+          const extractionResponse = await this.openaiClient.chat.completions.create({
+            model: config.extractionModel || "gpt-4o",
+            messages: messages,
+            max_tokens: 4000,
+            temperature: 0.2
+          });
+
+          // Parse OpenAI's response
+          const responseText = extractionResponse.choices[0].message.content;
+          const jsonText = responseText.replace(/```json|```/g, '').trim();
+          problemInfo = JSON.parse(jsonText);
+          
+          // Update the user on progress
+          if (mainWindow) {
+            mainWindow.webContents.send("processing-status", {
+              message: "Problem analyzed successfully. Preparing to generate solution...",
+              progress: 40
+            });
+          }
+        } catch (error) {
+          console.error("Error parsing OpenAI problem extraction response:", error);
+          return {
+            success: false,
+            error: "Failed to parse problem information. Please try again or use clearer screenshots."
+          };
+        }
       }
 
       // Store problem info in AppState
@@ -406,21 +495,21 @@ export class ProcessingHelper {
         };
       }
       
-      // Handle OpenAI API errors specifically
+      // Handle API errors specifically
       if (error?.response?.status === 401) {
         return {
           success: false,
-          error: "Invalid OpenAI API key. Please check your settings."
+          error: "Invalid API key. Please check your settings."
         };
       } else if (error?.response?.status === 429) {
         return {
           success: false,
-          error: "OpenAI API rate limit exceeded or insufficient credits. Please try again later."
+          error: "API rate limit exceeded or insufficient credits. Please try again later."
         };
       } else if (error?.response?.status === 500) {
         return {
           success: false,
-          error: "OpenAI server error. Please try again later."
+          error: "Server error. Please try again later."
         };
       }
 
@@ -443,10 +532,14 @@ export class ProcessingHelper {
         throw new Error("No problem info available");
       }
 
-      if (!this.openaiClient) {
+      // Determine which provider to use
+      const activeClient = this.getActiveClient();
+      const clientName = this.getActiveClientName();
+      
+      if (!activeClient) {
         return {
           success: false,
-          error: "OpenAI API key not configured. Please check your settings."
+          error: `${clientName} API key not configured. Please check your settings.`
         };
       }
 
@@ -501,18 +594,36 @@ O(X) with a detailed explanation (at least 2 sentences)
 Important: Make sure to provide actual implementation code in the CODE section, not pseudocode. The pseudocode belongs only in the PSEUDOCODE section.
 `;
 
-      // Send to OpenAI API
-      const solutionResponse = await this.openaiClient.chat.completions.create({
-        model: config.solutionModel || "gpt-4o",  // Using selected model for code generation
-        messages: [
-          { role: "system", content: "You are an expert coding interview assistant. Provide clear, optimal solutions with detailed explanations." },
-          { role: "user", content: promptText }
-        ],
-        max_tokens: 4000,
-        temperature: 0.2
-      });
+      let responseContent;
+      
+      if (config.provider === 'claude') {
+        // Claude implementation for solution generation
+        const solutionResponse = await this.claudeClient.messages.create({
+          model: "claude-3-7-sonnet-20250219",
+          max_tokens: 4000,
+          temperature: 0.2,
+          system: "You are an expert coding interview assistant. Provide clear, optimal solutions with detailed explanations. Use your thinking capabilities to analyze solutions thoroughly.",
+          messages: [
+            { role: "user", content: promptText }
+          ]
+        });
+        
+        // Extract Claude's response text
+        responseContent = solutionResponse.content[0].text;
+      } else {
+        // OpenAI implementation for solution generation
+        const solutionResponse = await this.openaiClient.chat.completions.create({
+          model: config.solutionModel || "gpt-4o",
+          messages: [
+            { role: "system", content: "You are an expert coding interview assistant. Provide clear, optimal solutions with detailed explanations." },
+            { role: "user", content: promptText }
+          ],
+          max_tokens: 4000,
+          temperature: 0.2
+        });
 
-      const responseContent = solutionResponse.choices[0].message.content;
+        responseContent = solutionResponse.choices[0].message.content;
+      }
       
       // Extract thoughts section
       const thoughtsRegex = /## THOUGHTS\s*([\s\S]*?)(?:## PSEUDOCODE|$)/i;
@@ -650,16 +761,16 @@ Important: Make sure to provide actual implementation code in the CODE section, 
 
       return { success: true, data: formattedResponse };
     } catch (error: any) {
-      // Handle OpenAI API errors specifically
+      // Handle API errors specifically
       if (error?.response?.status === 401) {
         return {
           success: false,
-          error: "Invalid OpenAI API key. Please check your settings."
+          error: "Invalid API key. Please check your settings."
         };
       } else if (error?.response?.status === 429) {
         return {
           success: false,
-          error: "OpenAI API rate limit exceeded or insufficient credits. Please try again later."
+          error: "API rate limit exceeded or insufficient credits. Please try again later."
         };
       }
       
@@ -682,10 +793,14 @@ Important: Make sure to provide actual implementation code in the CODE section, 
         throw new Error("No problem info available");
       }
 
-      if (!this.openaiClient) {
+      // Determine which provider to use
+      const activeClient = this.getActiveClient();
+      const clientName = this.getActiveClientName();
+      
+      if (!activeClient) {
         return {
           success: false,
-          error: "OpenAI API key not configured. Please check your settings."
+          error: `${clientName} API key not configured. Please check your settings.`
         };
       }
       
@@ -699,10 +814,80 @@ Important: Make sure to provide actual implementation code in the CODE section, 
 
       // Prepare the images for the API call
       const imageDataList = screenshots.map(screenshot => screenshot.data);
-      const messages = [
-        {
-          role: "system" as const, 
-          content: `You are a coding interview assistant helping debug and improve solutions. Analyze these screenshots which include either error messages, incorrect outputs, or test cases, and provide detailed debugging help.
+      
+      let debugContent;
+      
+      if (config.provider === 'claude') {
+        // Claude implementation for debugging
+        const debugSystemPrompt = `You are a coding interview assistant helping debug and improve solutions. Analyze these screenshots which include either error messages, incorrect outputs, or test cases, and provide detailed debugging help.
+
+Your response MUST follow this exact structure with these section headers (use ### for headers):
+### Issues Identified
+- List each issue as a bullet point with clear explanation
+
+### Specific Improvements and Corrections
+- List specific code changes needed as bullet points
+
+### Optimizations
+- List any performance optimizations if applicable
+
+### Explanation of Changes Needed
+Here provide a clear explanation of why the changes are needed
+
+### Key Points
+- Summary bullet points of the most important takeaways
+
+If you include code examples, use proper markdown code blocks with language specification (e.g. \`\`\`java).`;
+
+        const messages = [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `I'm solving this coding problem: "${problemInfo.problem_statement}" in ${language}. I need help with debugging or improving my solution. Here are screenshots of my code, the errors or test cases. Please provide a detailed analysis with:
+1. What issues you found in my code
+2. Specific improvements and corrections
+3. Any optimizations that would make the solution better
+4. A clear explanation of the changes needed`
+              },
+              ...imageDataList.map(data => ({
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: "image/png",
+                  data: data
+                }
+              }))
+            ]
+          }
+        ];
+
+        // Update progress
+        if (mainWindow) {
+          mainWindow.webContents.send("processing-status", {
+            message: "Analyzing code and generating debug feedback...",
+            progress: 60
+          });
+        }
+
+        // Send to Claude API
+        const debugResponse = await this.claudeClient.messages.create({
+          model: "claude-3-7-sonnet-20250219",
+          max_tokens: 4000,
+          temperature: 0.2,
+          system: debugSystemPrompt,
+          messages: messages
+        });
+        
+        // Extract Claude's response text
+        debugContent = debugResponse.content[0].text;
+      } else {
+        // OpenAI implementation for debugging
+        const messages = [
+          {
+            role: "system",
+            content: `You are a coding interview assistant helping debug and improve solutions. Analyze these screenshots which include either error messages, incorrect outputs, or test cases, and provide detailed debugging help.
 
 Your response MUST follow this exact structure with these section headers (use ### for headers):
 ### Issues Identified
@@ -721,41 +906,44 @@ Here provide a clear explanation of why the changes are needed
 - Summary bullet points of the most important takeaways
 
 If you include code examples, use proper markdown code blocks with language specification (e.g. \`\`\`java).`
-        },
-        {
-          role: "user" as const,
-          content: [
-            {
-              type: "text" as const, 
-              text: `I'm solving this coding problem: "${problemInfo.problem_statement}" in ${language}. I need help with debugging or improving my solution. Here are screenshots of my code, the errors or test cases. Please provide a detailed analysis with:
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `I'm solving this coding problem: "${problemInfo.problem_statement}" in ${language}. I need help with debugging or improving my solution. Here are screenshots of my code, the errors or test cases. Please provide a detailed analysis with:
 1. What issues you found in my code
 2. Specific improvements and corrections
 3. Any optimizations that would make the solution better
-4. A clear explanation of the changes needed` 
-            },
-            ...imageDataList.map(data => ({
-              type: "image_url" as const,
-              image_url: { url: `data:image/png;base64,${data}` }
-            }))
-          ]
+4. A clear explanation of the changes needed`
+              },
+              ...imageDataList.map(data => ({
+                type: "image_url",
+                image_url: { url: `data:image/png;base64,${data}` }
+              }))
+            ]
+          }
+        ];
+
+        // Update progress
+        if (mainWindow) {
+          mainWindow.webContents.send("processing-status", {
+            message: "Analyzing code and generating debug feedback...",
+            progress: 60
+          });
         }
-      ];
 
-      // Update progress
-      if (mainWindow) {
-        mainWindow.webContents.send("processing-status", {
-          message: "Analyzing code and generating debug feedback...",
-          progress: 60
+        // Send to OpenAI Vision API
+        const debugResponse = await this.openaiClient.chat.completions.create({
+          model: config.debuggingModel || "gpt-4o",
+          messages: messages,
+          max_tokens: 4000,
+          temperature: 0.2
         });
+        
+        debugContent = debugResponse.choices[0].message.content;
       }
-
-      // Send to OpenAI Vision API
-      const debugResponse = await this.openaiClient.chat.completions.create({
-        model: config.debuggingModel || "gpt-4o",
-        messages: messages,
-        max_tokens: 4000,
-        temperature: 0.2
-      });
       
       // Update final progress
       if (mainWindow) {
@@ -764,9 +952,6 @@ If you include code examples, use proper markdown code blocks with language spec
           progress: 100
         });
       }
-
-      // Extract and format the debug response
-      const debugContent = debugResponse.choices[0].message.content;
       
       // Extract code if there's code block in the response
       let extractedCode = "// Debug mode - see analysis below";
@@ -805,16 +990,16 @@ If you include code examples, use proper markdown code blocks with language spec
 
       return { success: true, data: response };
     } catch (error: any) {
-      // Handle OpenAI API errors specifically
+      // Handle API errors specifically
       if (error?.response?.status === 401) {
         return {
           success: false,
-          error: "Invalid OpenAI API key. Please check your settings."
+          error: "Invalid API key. Please check your settings."
         };
       } else if (error?.response?.status === 429) {
         return {
           success: false,
-          error: "OpenAI API rate limit exceeded or insufficient credits. Please try again later."
+          error: "API rate limit exceeded or insufficient credits. Please try again later."
         };
       }
       
