@@ -88,11 +88,14 @@ interface SettingsDialogProps {
 
 export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDialogProps) {
   const [open, setOpen] = useState(externalOpen || false);
+  const [provider, setProvider] = useState<'openai' | 'claude'>('openai');
   const [apiKey, setApiKey] = useState("");
+  const [claudeApiKey, setClaudeApiKey] = useState("");
   const [extractionModel, setExtractionModel] = useState("gpt-4o");
   const [solutionModel, setSolutionModel] = useState("gpt-4o");
   const [debuggingModel, setDebuggingModel] = useState("gpt-4o");
   const [isLoading, setIsLoading] = useState(false);
+  const [validationError, setValidationError] = useState("");
   const { showToast } = useToast();
 
   // Sync with external open state
@@ -115,10 +118,13 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
   useEffect(() => {
     if (open) {
       setIsLoading(true);
+      setValidationError("");
       window.electronAPI
         .getConfig()
         .then((config) => {
           setApiKey(config.apiKey || "");
+          setClaudeApiKey(config.claudeApiKey || "");
+          setProvider(config.provider || "openai");
           setExtractionModel(config.extractionModel || "gpt-4o");
           setSolutionModel(config.solutionModel || "gpt-4o");
           setDebuggingModel(config.debuggingModel || "gpt-4o");
@@ -133,11 +139,48 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
     }
   }, [open, showToast]);
 
+  // Validate API key format based on provider
+  const validateApiKey = (key: string, provider: 'openai' | 'claude'): boolean => {
+    if (provider === 'openai') {
+      return /^sk-[a-zA-Z0-9]{32,}$/.test(key.trim());
+    } else { // claude
+      return /^sk[-_]ant[-_][a-zA-Z0-9]{32,}$/.test(key.trim());
+    }
+  };
+
+  // Update the handleSave function
   const handleSave = async () => {
+    // Clear previous validation errors
+    setValidationError("");
+
+    // Validate based on selected provider
+    if (provider === 'openai' && apiKey && !validateApiKey(apiKey, 'openai')) {
+      setValidationError("Invalid OpenAI API key format. Keys should start with 'sk-'");
+      return;
+    }
+    
+    if (provider === 'claude' && claudeApiKey && !validateApiKey(claudeApiKey, 'claude')) {
+      setValidationError("Invalid Claude API key format. Keys should start with 'sk-ant-' or 'sk_ant_'");
+      return;
+    }
+
+    // Check if the required API key is provided
+    if (provider === 'openai' && !apiKey) {
+      setValidationError("OpenAI API key is required");
+      return;
+    }
+    
+    if (provider === 'claude' && !claudeApiKey) {
+      setValidationError("Claude API key is required");
+      return;
+    }
+
     setIsLoading(true);
     try {
       const result = await window.electronAPI.updateConfig({
+        provider,
         apiKey,
+        claudeApiKey,
         extractionModel,
         solutionModel,
         debuggingModel,
@@ -147,7 +190,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
         showToast("Success", "Settings saved successfully", "success");
         handleOpenChange(false);
         
-        // Force reload the app to apply the API key
+        // Force reload the app to apply changes
         setTimeout(() => {
           window.location.reload();
         }, 1500);
@@ -189,50 +232,211 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
           zIndex: 9999,
           margin: 0,
           padding: '20px',
-          transition: 'opacity 0.25s ease, transform 0.25s ease',
-          animation: 'fadeIn 0.25s ease forwards',
-          opacity: 0.98
+          opacity: 0.98,
+          animation: 'fadeInSimple 0.2s ease-out'
         }}
-      >        <DialogHeader>
-          <DialogTitle>OpenAI API Settings</DialogTitle>
+      >        
+        <DialogHeader>
+          <DialogTitle>AI Provider Settings</DialogTitle>
           <DialogDescription className="text-white/70">
-            Configure your OpenAI API key and model preferences. You'll need your own OpenAI API key to use this application.
+            Configure your API settings and model preferences. You'll need your own API key to use this application.
           </DialogDescription>
         </DialogHeader>
+
         <div className="space-y-4 py-4">
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-white" htmlFor="apiKey">
-              OpenAI API Key
-            </label>
-            <Input
-              id="apiKey"
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-..."
-              className="bg-black/50 border-white/10 text-white"
-            />
-            {apiKey && (
-              <p className="text-xs text-white/50">
-                Current: {maskApiKey(apiKey)}
-              </p>
-            )}
-            <p className="text-xs text-white/50">
-              Your API key is stored locally and never sent to any server except OpenAI
-            </p>
-            <div className="mt-2 p-2 rounded-md bg-white/5 border border-white/10">
-              <p className="text-xs text-white/80 mb-1">Don't have an API key?</p>
-              <p className="text-xs text-white/60 mb-1">1. Create an account at <button 
-                onClick={() => openExternalLink('https://platform.openai.com/signup')} 
-                className="text-blue-400 hover:underline cursor-pointer">OpenAI</button>
-              </p>
-              <p className="text-xs text-white/60 mb-1">2. Go to <button 
-                onClick={() => openExternalLink('https://platform.openai.com/api-keys')} 
-                className="text-blue-400 hover:underline cursor-pointer">API Keys</button> section
-              </p>
-              <p className="text-xs text-white/60">3. Create a new secret key and paste it here</p>
+          {/* Provider Selection */}
+          <div className="space-y-2 mb-4">
+            <label className="text-sm font-medium text-white">AI Provider</label>
+            <div className="flex flex-col space-y-2">
+              <div 
+                className={`p-2 rounded-lg cursor-pointer transition-colors ${
+                  provider === "openai"
+                    ? "bg-white/10 border border-white/20"
+                    : "bg-black/30 border border-white/5 hover:bg-white/5"
+                }`}
+                onClick={() => setProvider("openai")}
+              >
+                <div className="flex items-center gap-2">
+                  <div
+                    className={`w-3 h-3 rounded-full ${
+                      provider === "openai" ? "bg-white" : "bg-white/20"
+                    }`}
+                  />
+                  <div>
+                    <p className="font-medium text-white text-xs">OpenAI (GPT-4o)</p>
+                    <p className="text-xs text-white/60">Multiple model options, excellent code generation</p>
+                  </div>
+                </div>
+              </div>
+              
+              <div 
+                className={`p-2 rounded-lg cursor-pointer transition-colors ${
+                  provider === "claude"
+                    ? "bg-white/10 border border-white/20"
+                    : "bg-black/30 border border-white/5 hover:bg-white/5"
+                }`}
+                onClick={() => setProvider("claude")}
+              >
+                <div className="flex items-center gap-2">
+                  <div
+                    className={`w-3 h-3 rounded-full ${
+                      provider === "claude" ? "bg-white" : "bg-white/20"
+                    }`}
+                  />
+                  <div>
+                    <p className="font-medium text-white text-xs">Claude 3.7 Sonnet</p>
+                    <p className="text-xs text-white/60">Advanced reasoning, thorough analysis</p>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
+
+          {/* Validation error message */}
+          {validationError && (
+            <div className="p-2 bg-red-900/20 border border-red-500/30 rounded-md text-red-400 text-xs">
+              {validationError}
+            </div>
+          )}
+
+          {/* OpenAI API Key Input - show only when OpenAI is selected */}
+          {provider === "openai" && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-white" htmlFor="apiKey">
+                OpenAI API Key
+              </label>
+              <Input
+                id="apiKey"
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="sk-..."
+                className="bg-black/50 border-white/10 text-white"
+              />
+              {apiKey && (
+                <p className="text-xs text-white/50">
+                  Current: {maskApiKey(apiKey)}
+                </p>
+              )}
+              <p className="text-xs text-white/50">
+                Your API key is stored locally and never sent to any server except OpenAI
+              </p>
+              <div className="mt-2 p-2 rounded-md bg-white/5 border border-white/10">
+                <p className="text-xs text-white/80 mb-1">Don't have an API key?</p>
+                <p className="text-xs text-white/60 mb-1">1. Create an account at <button 
+                  onClick={() => openExternalLink('https://platform.openai.com/signup')} 
+                  className="text-blue-400 hover:underline cursor-pointer">OpenAI</button>
+                </p>
+                <p className="text-xs text-white/60 mb-1">2. Go to <button 
+                  onClick={() => openExternalLink('https://platform.openai.com/api-keys')} 
+                  className="text-blue-400 hover:underline cursor-pointer">API Keys</button> section
+                </p>
+                <p className="text-xs text-white/60">3. Create a new secret key and paste it here</p>
+              </div>
+            </div>
+          )}
+
+          {/* Claude API Key Input - show only when Claude is selected */}
+          {provider === "claude" && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-white" htmlFor="claudeApiKey">
+                Claude API Key
+              </label>
+              <Input
+                id="claudeApiKey"
+                type="password"
+                value={claudeApiKey}
+                onChange={(e) => setClaudeApiKey(e.target.value)}
+                placeholder="sk-ant-..."
+                className="bg-black/50 border-white/10 text-white"
+              />
+              {claudeApiKey && (
+                <p className="text-xs text-white/50">
+                  Current: {maskApiKey(claudeApiKey)}
+                </p>
+              )}
+              <p className="text-xs text-white/50">
+                Your API key is stored locally and never sent to any server except Anthropic
+              </p>
+              <div className="mt-2 p-2 rounded-md bg-white/5 border border-white/10">
+                <p className="text-xs text-white/80 mb-1">Don't have a Claude API key?</p>
+                <p className="text-xs text-white/60 mb-1">1. Create an account at <button 
+                  onClick={() => openExternalLink('https://console.anthropic.com')} 
+                  className="text-blue-400 hover:underline cursor-pointer">Anthropic Console</button>
+                </p>
+                <p className="text-xs text-white/60 mb-1">2. Go to API Keys section in the console</p>
+                <p className="text-xs text-white/60">3. Create a new API key and paste it here</p>
+              </div>
+            </div>
+          )}
+
+          {/* Model selection - only show when OpenAI is selected */}
+          {provider === "openai" && (
+            <div className="space-y-4 mt-4">
+              <label className="text-sm font-medium text-white">AI Model Selection</label>
+              <p className="text-xs text-white/60 -mt-3 mb-2">
+                Select which models to use for each stage of the process
+              </p>
+              
+              {modelCategories.map((category) => (
+                <div key={category.key} className="mb-4">
+                  <label className="text-sm font-medium text-white mb-1 block">
+                    {category.title}
+                  </label>
+                  <p className="text-xs text-white/60 mb-2">{category.description}</p>
+                  
+                  <div className="space-y-2">
+                    {category.models.map((m) => {
+                      // Determine which state to use based on category key
+                      const currentValue = 
+                        category.key === 'extractionModel' ? extractionModel :
+                        category.key === 'solutionModel' ? solutionModel :
+                        debuggingModel;
+                      
+                      // Determine which setter function to use
+                      const setValue = 
+                        category.key === 'extractionModel' ? setExtractionModel :
+                        category.key === 'solutionModel' ? setSolutionModel :
+                        setDebuggingModel;
+                        
+                      return (
+                        <div
+                          key={m.id}
+                          className={`p-2 rounded-lg cursor-pointer transition-colors ${
+                            currentValue === m.id
+                              ? "bg-white/10 border border-white/20"
+                              : "bg-black/30 border border-white/5 hover:bg-white/5"
+                          }`}
+                          onClick={() => setValue(m.id)}
+                        >
+                          <div className="flex items-center gap-2">
+                            <div
+                              className={`w-3 h-3 rounded-full ${
+                                currentValue === m.id ? "bg-white" : "bg-white/20"
+                              }`}
+                            />
+                            <div>
+                              <p className="font-medium text-white text-xs">{m.name}</p>
+                              <p className="text-xs text-white/60">{m.description}</p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Note about Claude model when selected */}
+          {provider === "claude" && (
+            <div className="space-y-2 mt-4 p-3 bg-white/5 rounded-lg">
+              <label className="text-sm font-medium text-white">AI Model</label>
+              <p className="text-xs text-white/70 mb-2">Using Claude 3.7 Sonnet with extended thinking capabilities for optimal results.</p>
+              <p className="text-xs text-white/60">Claude 3.7 Sonnet is Anthropic's most advanced model, offering excellent code generation, problem-solving, and reasoning capabilities.</p>
+            </div>
+          )}
           
           <div className="space-y-2 mt-4">
             <label className="text-sm font-medium text-white mb-2 block">Keyboard Shortcuts</label>
@@ -259,80 +463,13 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
                 <div className="text-white/70">Move Window</div>
                 <div className="text-white/90 font-mono">Ctrl+Arrow Keys</div>
                 
-                <div className="text-white/70">Decrease Opacity</div>
-                <div className="text-white/90 font-mono">Ctrl+[ / Cmd+[</div>
-                
-                <div className="text-white/70">Increase Opacity</div>
-                <div className="text-white/90 font-mono">Ctrl+] / Cmd+]</div>
-                
-                <div className="text-white/70">Zoom Out</div>
-                <div className="text-white/90 font-mono">Ctrl+- / Cmd+-</div>
-                
-                <div className="text-white/70">Reset Zoom</div>
-                <div className="text-white/90 font-mono">Ctrl+0 / Cmd+0</div>
-                
-                <div className="text-white/70">Zoom In</div>
-                <div className="text-white/90 font-mono">Ctrl+= / Cmd+=</div>
+                <div className="text-white/70">Adjust Opacity</div>
+                <div className="text-white/90 font-mono">Ctrl+[ / Ctrl+]</div>
               </div>
             </div>
           </div>
-          
-          <div className="space-y-4 mt-4">
-            <label className="text-sm font-medium text-white">AI Model Selection</label>
-            <p className="text-xs text-white/60 -mt-3 mb-2">
-              Select which models to use for each stage of the process
-            </p>
-            
-            {modelCategories.map((category) => (
-              <div key={category.key} className="mb-4">
-                <label className="text-sm font-medium text-white mb-1 block">
-                  {category.title}
-                </label>
-                <p className="text-xs text-white/60 mb-2">{category.description}</p>
-                
-                <div className="space-y-2">
-                  {category.models.map((m) => {
-                    // Determine which state to use based on category key
-                    const currentValue = 
-                      category.key === 'extractionModel' ? extractionModel :
-                      category.key === 'solutionModel' ? solutionModel :
-                      debuggingModel;
-                    
-                    // Determine which setter function to use
-                    const setValue = 
-                      category.key === 'extractionModel' ? setExtractionModel :
-                      category.key === 'solutionModel' ? setSolutionModel :
-                      setDebuggingModel;
-                      
-                    return (
-                      <div
-                        key={m.id}
-                        className={`p-2 rounded-lg cursor-pointer transition-colors ${
-                          currentValue === m.id
-                            ? "bg-white/10 border border-white/20"
-                            : "bg-black/30 border border-white/5 hover:bg-white/5"
-                        }`}
-                        onClick={() => setValue(m.id)}
-                      >
-                        <div className="flex items-center gap-2">
-                          <div
-                            className={`w-3 h-3 rounded-full ${
-                              currentValue === m.id ? "bg-white" : "bg-white/20"
-                            }`}
-                          />
-                          <div>
-                            <p className="font-medium text-white text-xs">{m.name}</p>
-                            <p className="text-xs text-white/60">{m.description}</p>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
+
         <DialogFooter className="flex justify-between sm:justify-between">
           <Button
             variant="outline"
@@ -344,7 +481,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
           <Button
             className="px-4 py-3 bg-white text-black rounded-xl font-medium hover:bg-white/90 transition-colors"
             onClick={handleSave}
-            disabled={isLoading || !apiKey}
+            disabled={isLoading}
           >
             {isLoading ? "Saving..." : "Save Settings"}
           </Button>
