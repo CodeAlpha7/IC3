@@ -476,16 +476,29 @@ ${problemInfo.example_output || "No example output provided."}
 
 LANGUAGE: ${language}
 
-I need the response in the following format:
-1. Your Thoughts: A list of key insights and reasoning behind your approach
-2. Pseudocode: A high-level algorithm outline in pseudocode format
-3. Code: A clean, optimized implementation in ${language}
-4. Time complexity: O(X) with a detailed explanation (at least 2 sentences)
-5. Space complexity: O(X) with a detailed explanation (at least 2 sentences)
+I need the response in the following format with clear section markers:
 
-For complexity explanations, please be thorough. For example: "Time complexity: O(n) because we iterate through the array only once. This is optimal as we need to examine each element at least once to find the solution." or "Space complexity: O(n) because in the worst case, we store all elements in the hashmap. The additional space scales linearly with the input size."
+## THOUGHTS
+- Key insights about the problem
+- Your reasoning approach
+(List 3-5 bullet points)
 
-Your solution should be efficient, well-commented, and handle edge cases.
+## PSEUDOCODE
+Provide a concise, language-agnostic pseudocode (5-10 lines) outlining the main algorithm steps.
+
+## CODE
+\`\`\`${language}
+// Your actual clean, concise and optimized implementation code in ${language}
+// This should be a complete working solution, not pseudocode
+\`\`\`
+
+## TIME COMPLEXITY
+O(X) with a detailed explanation (at least 2 sentences)
+
+## SPACE COMPLEXITY
+O(X) with a detailed explanation (at least 2 sentences)
+
+Important: Make sure to provide actual implementation code in the CODE section, not pseudocode. The pseudocode belongs only in the PSEUDOCODE section.
 `;
 
       // Send to OpenAI API
@@ -501,22 +514,10 @@ Your solution should be efficient, well-commented, and handle edge cases.
 
       const responseContent = solutionResponse.choices[0].message.content;
       
-      // Extract parts from the response
-      const codeMatch = responseContent.match(/```(?:\w+)?\s*([\s\S]*?)```/);
-      const code = codeMatch ? codeMatch[1].trim() : responseContent;
-      
-      // Extract thoughts, looking for bullet points or numbered lists
-      const thoughtsRegex = /(?:Thoughts:|Key Insights:|Reasoning:|Approach:)([\s\S]*?)(?:Time complexity:|$)/i;
+      // Extract thoughts section
+      const thoughtsRegex = /## THOUGHTS\s*([\s\S]*?)(?:## PSEUDOCODE|$)/i;
       const thoughtsMatch = responseContent.match(thoughtsRegex);
       let thoughts: string[] = [];
-
-      // Extract pseudocode with a regex pattern
-      const pseudocodeRegex = /(?:Pseudocode:|2\.\s*Pseudocode:)([\s\S]*?)(?:Code:|3\.\s*Code:)/i;
-      const pseudocodeMatch = responseContent.match(pseudocodeRegex);
-      let pseudocode = "";
-      if (pseudocodeMatch && pseudocodeMatch[1]) {
-        pseudocode = pseudocodeMatch[1].trim();
-      }
       
       if (thoughtsMatch && thoughtsMatch[1]) {
         // Extract bullet points or numbered items
@@ -533,10 +534,71 @@ Your solution should be efficient, well-commented, and handle edge cases.
         }
       }
       
+      // Extract pseudocode with a better regex pattern looking for ## markers
+      const pseudocodeRegex = /## PSEUDOCODE\s*([\s\S]*?)(?:## CODE|$)/i;
+      const pseudocodeMatch = responseContent.match(pseudocodeRegex);
+      let pseudocode = "";
+      if (pseudocodeMatch && pseudocodeMatch[1]) {
+        pseudocode = pseudocodeMatch[1].trim();
+      } else {
+        // Alternative extraction method if the first one fails
+        const alternativePseudocodeRegex = /(?:Pseudocode:|2\.\s*Pseudocode:)([\s\S]*?)(?:Code:|3\.\s*Code:|```)/i;
+        const alternativeMatch = responseContent.match(alternativePseudocodeRegex);
+        if (alternativeMatch && alternativeMatch[1]) {
+          pseudocode = alternativeMatch[1].trim();
+        }
+      }
+      
+      // If still no pseudocode, try another approach - locate positions and extract
+      if (!pseudocode) {
+        const thoughtsEndPos = responseContent.indexOf("## PSEUDOCODE");
+        const codeStartPos = responseContent.indexOf("## CODE");
+        
+        if (thoughtsEndPos !== -1 && codeStartPos !== -1 && thoughtsEndPos < codeStartPos) {
+          pseudocode = responseContent.substring(thoughtsEndPos + 13, codeStartPos).trim();
+        }
+      }
+      
+      // Extract the actual implementation code specifically from after the ## CODE marker
+      let code = "";
+      const codeSectionPos = responseContent.indexOf('## CODE');
+      if (codeSectionPos !== -1) {
+        // Only search for code blocks that come after the ## CODE marker
+        const codeSection = responseContent.substring(codeSectionPos);
+        const codeBlockMatch = codeSection.match(/```(?:\w+)?\s*([\s\S]*?)```/);
+        if (codeBlockMatch && codeBlockMatch[1]) {
+          code = codeBlockMatch[1].trim();
+        }
+      } else {
+        // Fallback - try to find code block after "Code:" or "3. Code:" markers
+        const alternativeCodeRegex = /(?:Code:|3\.\s*Code:)([\s\S]*?)(?:## TIME COMPLEXITY|Time Complexity:|4\.|$)/i;
+        const alternativeMatch = responseContent.match(alternativeCodeRegex);
+        if (alternativeMatch && alternativeMatch[1]) {
+          // Try to extract a code block from this section
+          const codeBlockMatch = alternativeMatch[1].match(/```(?:\w+)?\s*([\s\S]*?)```/);
+          if (codeBlockMatch && codeBlockMatch[1]) {
+            code = codeBlockMatch[1].trim();
+          } else {
+            // If no code block with backticks, use the content directly but clean it up
+            code = alternativeMatch[1].trim();
+          }
+        } else {
+          // Last resort - just find any code block in the response
+          const anyCodeMatch = responseContent.match(/```(?:\w+)?\s*([\s\S]*?)```/);
+          if (anyCodeMatch && anyCodeMatch[1]) {
+            code = anyCodeMatch[1].trim();
+          }
+        }
+      }
+
+      // If we still don't have code, use a fallback message
+      if (!code) {
+        code = "// Could not extract implementation code. Please try again.";
+      }
+      
       // Extract complexity information
-      // Use more flexible patterns to find complexity sections
-      const timeComplexityPattern = /Time complexity:?\s*([^\n]+(?:\n[^\n]+)*?)(?=\n\s*(?:Space complexity|$))/i;
-      const spaceComplexityPattern = /Space complexity:?\s*([^\n]+(?:\n[^\n]+)*?)(?=\n\s*(?:[A-Z]|$))/i;
+      const timeComplexityPattern = /## TIME COMPLEXITY\s*([\s\S]*?)(?:## SPACE COMPLEXITY|$)/i;
+      const spaceComplexityPattern = /## SPACE COMPLEXITY\s*([\s\S]*?)(?:$)/i;
       
       let timeComplexity = "O(n) - Linear time complexity because we only iterate through the array once. Each element is processed exactly one time, and the hashmap lookups are O(1) operations.";
       let spaceComplexity = "O(n) - Linear space complexity because we store elements in the hashmap. In the worst case, we might need to store all elements before finding the solution pair.";
@@ -580,7 +642,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
       // Construct the formatted response
       const formattedResponse = {
         code: code,
-        pseudocode: pseudocode,
+        pseudocode: pseudocode || "Concise algorithm steps for solving the problem",
         thoughts: thoughts.length > 0 ? thoughts : ["Solution approach based on efficiency and readability"],
         time_complexity: timeComplexity,
         space_complexity: spaceComplexity
@@ -734,6 +796,7 @@ If you include code examples, use proper markdown code blocks with language spec
       // Return the debug assistance in the format expected by the app
       const response = {
         code: extractedCode,
+        pseudocode: "// No pseudocode for debug mode", // Add pseudocode field for consistency
         debug_analysis: formattedDebugContent,
         thoughts: thoughts,
         time_complexity: "N/A - Debug mode",
