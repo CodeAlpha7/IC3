@@ -8,6 +8,11 @@
   to { opacity: 0.98; transform: translate(-50%, -50%); }
 }
 
+@keyframes fadeInSimple {
+  from { opacity: 0; }
+  to { opacity: 0.98; }
+}
+
 /* Dialog transition improvements */
 .settings-dialog {
   transform-origin: center;
